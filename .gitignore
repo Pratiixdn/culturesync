@@ -1,0 +1,25 @@
+# secrets
+.env
+.env.*
+!.env.example
+!.env.development
+# python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# local databases
+*.db
+*.sqlite
+*.sqlite3
+# frontend
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+# os / editor
+.DS_Store
+.idea/
+.vscode/

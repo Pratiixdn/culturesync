@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Theme tokens as space-separated RGB so Tailwind opacity modifiers keep working. */
+:root {
+  --paper: 250 250 248;
+  --surface: 255 255 255;
+  --muted: 245 245 244;
+  --ink: 27 25 23;
+  --ink-soft: 87 83 78;
+  --ink-faint: 120 113 108;
+  --line: 231 229 228;
+  --accent: 194 65 12;
+  --accent-deep: 154 52 18;
+  --accent-tint: 254 243 236;
+  --on-accent: 255 255 255;
+  --edge-shared: 194 65 12;
+  --edge-qloo: 29 78 216;
+  --edge-category: 168 162 158;
+  --shadow-card: 0 1px 2px rgba(27, 25, 23, 0.05), 0 4px 16px rgba(27, 25, 23, 0.04);
+  color-scheme: light;
+}
+
+.dark {
+  --paper: 18 18 18; /* #121212 */
+  --surface: 28 28 28;
+  --muted: 38 38 38;
+  --ink: 224 224 224; /* #E0E0E0 */
+  --ink-soft: 176 176 176; /* #B0B0B0 */
+  --ink-faint: 136 136 136; /* #888888 */
+  --line: 68 68 68; /* #444444 */
+  --accent: 136 136 136; /* #888888 */
+  --accent-deep: 168 168 168;
+  --accent-tint: 44 44 44;
+  --on-accent: 18 18 18;
+  --edge-shared: 224 224 224;
+  --edge-qloo: 138 180 248;
+  --edge-category: 102 102 102;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.5), 0 4px 16px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+}
+
+::selection {
+  background: rgb(var(--accent));
+  color: rgb(var(--on-accent));
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-paper font-sans text-ink antialiased;
+}
