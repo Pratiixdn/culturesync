@@ -1,12 +1,52 @@
-# CULTURESYNC
+# CULTURESYNC: Team Culture Agent
 
-**Team Culture Agent**: an LLM agent that plans team decisions using only entities Qloo returned (see SUBMISSION.md for the project description). Also maps cultural connections between team members. Built for the Qloo hackathon. Next.js frontend (static export) + FastAPI backend, deployed as **one Render service** (same origin, no CORS setup).
+**An AI agent that decides things for a whole team, using only what Qloo's taste data supports.**
+
+**Live demo:** `<paste your Render URL here>`  |  **License:** MIT (see `LICENSE`)
+
+## The problem
+Teams constantly decide things together: where to hold an offsite, where to eat, what music to play, where to travel. Everyone likes different things, and a normal AI just guesses what is popular.
+
+## What it does
+1. You create a team and add each person's tastes (artists, movies, TV, books, brands, games, podcasts, restaurants and places, travel destinations). Each one is matched to a real item in Qloo's database.
+2. You ask the **Team Culture Agent** for something, such as "Plan a team offsite everyone will enjoy".
+3. The agent searches Qloo step by step, and you watch each step live. It asks Qloo what fits the whole team's tastes.
+4. You get recommendations. Only items Qloo actually returned are kept. Anything the AI made up is removed, and the app shows how many it removed.
+
+The app also has a **Map** and **Insights** page that show shared interests and Qloo-found links between team members, and a **Collaborate** page that turns a shared interest into a brainstorming activity.
+
+## Why Qloo matters here
+Without Qloo the agent has nothing to recommend from. Qloo supplies the items and the affinity scores. The AI plans and explains, but it cannot add recommendations of its own. The AI's "why" sentences are labeled as AI-written; the items and scores are Qloo's.
+
+## What it does not do
+It does not judge anyone's personality or how well people will work together. Shared tastes are conversation starters only.
+
+## Built with
+Next.js (static export) and FastAPI served as **one Render service**, SQLite, the Qloo API and Google Gemini. A longer project description is in `SUBMISSION.md`.
 
 ```
-backend/   FastAPI, SQLite, Qloo client (app/qloo.py), tests
+backend/   FastAPI, SQLite, Qloo client (app/qloo.py), agent (app/agent.py), tests
 frontend/  Next.js 15 + Tailwind (exported to frontend/out, served by FastAPI)
 Dockerfile, render.yaml
 ```
+
+## Try it in 2 minutes (for judges)
+
+1. Open the live demo, go to **Workspace**, and click **Load a sample demo team** (or create a team and add members).
+2. On **Workspace**, add an interest and pick a result from the search list. That links it to a real Qloo entity.
+3. Open **Agent**, click an example goal such as "Plan a team offsite everyone will enjoy", and press **Run agent**. Watch it call Qloo step by step.
+4. Open **Insights** and press **Run Qloo analysis** to see Qloo affinities between members, then **Map** to see them as a graph.
+5. **Settings** shows whether the live Qloo key and the agent are connected.
+
+## Keys you need
+
+| Variable | Where to get it | Required |
+| --- | --- | --- |
+| `QLOO_API_KEY` | Qloo hackathon developer guide | Yes (without it the app runs on a small mock sample, clearly labeled) |
+| `QLOO_BASE_URL` | Given with the hackathon key; default `https://hackathon.api.qloo.com` | Yes |
+| `GEMINI_API_KEY` | https://aistudio.google.com/apikey (free tier) | For the Agent page |
+
+Copy `backend/.env.example` to `backend/.env` and fill them in. `.env` is git-ignored.
 
 ## Run locally
 
@@ -51,15 +91,15 @@ Light, Dark (#121212 background, #E0E0E0 text, #B0B0B0 secondary, #444444 border
 - Limits: 8 model turns and 15 Qloo calls per run, 4 runs/min per IP, `AGENT_DAILY_LIMIT` runs/day for the whole server. Gemini free tier has tight per-minute limits (a run makes ~4-6 model calls), so the client retries a 429 once and otherwise shows a "busy, try again" message. Note: free-tier prompts may be used by Google to improve its products, so keep real personal data out of the demo.
 - The agent does not run in mock Qloo mode with real quality: it still works, but over the small sample catalog and the UI says so.
 
-## Hackathon checklist
+## Hackathon requirements
 
-| Requirement | Status |
+| Requirement | Where |
 | --- | --- |
-| Agentic tool using Qloo | Team Culture Agent (LLM tool-use loop over Qloo search/insights) |
-| Functional hosted demo | Deploy via `render.yaml`; set both keys; open the URL yourself before submitting |
-| Public repo with instructions | Push this folder to a public GitHub repo (this README) |
+| Agentic tool using Qloo | Team Culture Agent: an LLM tool-use loop over Qloo search, insights and scoring (`backend/app/agent.py`) |
+| Functional hosted demo | Live demo link at the top of this README (Render) |
+| Public repository with run instructions | This repository; see "Run locally" |
 | Text description | `SUBMISSION.md` |
-| Open-source license visible in About | `LICENSE` (MIT) at repo root; GitHub shows it automatically |
+| Open-source license | `LICENSE` (MIT) |
 
 ## Modes
 
@@ -77,7 +117,7 @@ Light, Dark (#121212 background, #E0E0E0 text, #B0B0B0 secondary, #444444 border
 | GET / PATCH | `/teams/{id}` | team + members |
 | POST | `/teams/{id}/members` | `{name, interests?[]}` |
 | PATCH / DELETE | `/teams/{id}/members/{mid}` | PATCH `{name?, interests?}` (replaces interests) |
-| GET | `/entities/search?q=&category=` | Qloo `/search`; category: music, movies, tv, books, brands, games, podcasts |
+| GET | `/entities/search?q=&category=` | Qloo `/search`; category: music, movies, tv, books, brands, games, podcasts, places, destinations |
 | POST | `/teams/{id}/insights` | runs Qloo analysis (resolve, affinities, suggestions), saves it |
 | GET | `/teams/{id}/connections` | local connections + last Qloo analysis if still current |
 | POST / GET | `/teams/{id}/activities` | `{connection_ids:[1..3]}`; deterministic template, not AI |
@@ -101,12 +141,12 @@ curl -s -X POST localhost:8000/api/teams/$TEAM/insights -H 'content-type: applic
 - `qloo_affinity` (Qloo): member X's picks as `signal.interests.entities`, member Y's picks scored via `filter.results.entities`. Only entities Qloo returns appear; absent = unknown. `affinity` is passed through exactly as returned, else `null`. No confidence scores are invented.
 - Analysis auto-matches typed interests to the top Qloo search hit for that run only (shown in the UI, never saved).
 
-## Verification status (be honest in your demo)
+## What is tested
 
-- **Tested:** 65 backend tests with mocked HTTP (the agent is tested with a scripted fake LLM); frontend typecheck + production build; headless-Chromium run (Playwright) over every page: dark/light/system theme, all Settings buttons, demo team, analysis, map, activity + idea flow, interest search; no hydration or JS errors.
-- **NOT verified live:** the Gemini call (request/response translation is tested with mocked HTTP; `AGENT_MODEL` default `gemini-2.5-flash` may have been renamed or retired, so change it if Google returns an error) and the agent's real-world answer quality.
-- **NOT verified against real Qloo** (no key was available; the docs site blocks automated fetching): response field names (`results`, `results.entities`, `entity_id`, `query.affinity`), type URNs for `tv_show`/`videogame`/`podcast`/`place`/`destination` (places may also need a location filter), and `filter.results.entities` behaviour. Parsing is defensive and isolated in `backend/app/qloo.py`; `CATEGORY_TYPES` is the one dict to fix if a URN is wrong. First thing to do with a key: Settings > Test Qloo request, then add an interest via search.
-- Dockerfile / `render.yaml` were written but not built in the authoring sandbox.
+- **Automated:** 74 backend tests with mocked HTTP (the agent runs against a scripted fake LLM), a frontend typecheck and production build, and a headless-browser run over every page (dark/light/system theme, Settings buttons, demo team, analysis, map, activities and ideas, interest search).
+- **Run live by the author:** Qloo search, recommendations and scoring, and Gemini tool calling, in local runs.
+- **Not independently confirmed:** the Docker image build on Render, the Qloo type names for TV, games, podcasts, places and travel (`CATEGORY_TYPES` in `backend/app/qloo.py` is the one place to fix them; `python scripts/check_qloo.py` checks them), and behavior under many users at once on the free Gemini tier.
+- The Gemini client retries temporary errors and falls back through the models in `AGENT_MODEL` (a comma-separated list). `python scripts/list_gemini_models.py` shows the names your key can use.
 
 ## Security / access limits
 
