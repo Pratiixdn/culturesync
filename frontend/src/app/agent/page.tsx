@@ -8,6 +8,7 @@ import { Badge, Button, ButtonLink, Card, EmptyState, Spinner, cn } from "../../
 
 const EXAMPLES = [
   "Plan a team offsite everyone will enjoy",
+  "How can we improve communication in our team?",
   "Pick music for our team playlist",
   "Where should we go for a team dinner?",
   "Suggest a trip for our next retreat",
@@ -176,6 +177,18 @@ function RunView({ run }: { run: AgentRun }) {
           <span>{new Date(run.created_at).toLocaleString()}</span>
         </div>
       </Card>
+
+      {(run.actions ?? []).length > 0 ? (
+        <Card className="p-5">
+          <h3 className="font-display text-lg text-ink">Suggested activities</h3>
+          <p className="mt-1 text-xs text-ink-faint">Written by the agent&apos;s language model, built on the Qloo picks and interests below.</p>
+          <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-ink">
+            {(run.actions ?? []).map((action) => (
+              <li key={action}>{action}</li>
+            ))}
+          </ol>
+        </Card>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-2">
         {run.recommendations.map((rec) => (

@@ -173,6 +173,7 @@ export interface AgentRun {
   goal: string;
   summary: string;
   recommendations: AgentRecommendation[];
+  actions?: string[];
   caveats: string[];
   dropped_ungrounded: number;
   steps: AgentStep[];

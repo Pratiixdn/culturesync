@@ -56,7 +56,9 @@ HAPPY = [
     [use("get_team")],
     [use("search_entities", query="Tame Impala", category="music")],
     [use("get_recommendations", category="music", signal_entity_ids=["mock:music:tame-impala"])],
-    [use("submit_plan", summary="Go with Kendrick Lamar.", caveats=["Small sample."], recommendations=[
+    [use("submit_plan", summary="Go with Kendrick Lamar.", caveats=["Small sample."],
+         actions=["Host a 20-minute listening session of Kendrick Lamar and Tame Impala.", "Do a generic trust exercise.", "x" * 301],
+         recommendations=[
         {"entity_id": "mock:music:kendrick-lamar", "why": "Fits Tame Impala fans.", "supported_by": ["Tame Impala", "Imaginary Band"]},
         {"entity_id": "made-up-id", "why": "Invented by the model."},
     ])],
@@ -76,6 +78,7 @@ def test_agent_streams_steps_and_returns_only_qloo_grounded_picks():
         assert result["dropped_ungrounded"] == 1
         assert result["recommendations"][0]["supported_by"] == ["Tame Impala"]  # invented support removed
         assert result["qloo_calls"] == 2 and result["model"] == "fake-model" and result["caveats"] == ["Small sample."]
+        assert result["actions"] == ["Host a 20-minute listening session of Kendrick Lamar and Tame Impala."]  # ungrounded and too-long dropped
         runs = c.get(f"/api/teams/{tid}/agent/runs").json()["data"]["runs"]
         assert len(runs) == 1 and runs[0]["id"] == result["id"]
 
@@ -121,23 +124,23 @@ def test_fully_ungrounded_plan_gets_one_retry():
 
 
 def test_agent_without_submit_plan_is_nudged_then_fails_safely():
-    llm = FakeLlm([[{"type": "text", "text": "Here is my answer in prose."}]] * 2)
+    llm = FakeLlm([[{"type": "text", "text": "Here is my answer in prose."}]] * 3)
     with make(llm) as c:
         tid = team_with_interests(c)
         last = events(ask(c, tid))[-1]
         assert last["type"] == "error" and last["code"] == "agent_no_plan"
-        assert "submit_plan" in llm.calls[1][-1]["content"]
+        assert len(llm.calls) == 3 and "submit_plan" in llm.calls[1][-1]["content"]
 
 
 def test_agent_step_limit():
-    turns = [[use("get_team")]] * 8
+    turns = [[use("search_entities", query=f"Daft Punk {i}", category="music")] for i in range(10)]
     with make(FakeLlm(turns)) as c:
         tid = team_with_interests(c)
         assert events(ask(c, tid))[-1]["code"] == "agent_step_limit"
 
 
 def test_qloo_budget_is_enforced_inside_tools():
-    turns = [[use("search_entities", query="Tame Impala", category="music")]] * 3 + [[use("submit_plan", summary="s", recommendations=[{"entity_id": "mock:music:tame-impala", "why": "w"}])]]
+    turns = [[use("search_entities", query=f"Tame Impala {i}", category="music")] for i in range(3)] + [[use("submit_plan", summary="s", recommendations=[{"entity_id": "mock:music:tame-impala", "why": "w"}])]]
     with make(FakeLlm(turns), max_agent_qloo_calls=2) as c:
         tid = team_with_interests(c)
         ev = events(ask(c, tid))
@@ -216,8 +219,9 @@ def test_gemini_request_shape_and_parsing():
     assert body["toolConfig"]["functionCallingConfig"]["mode"] == "ANY"
     declarations = body["tools"][0]["functionDeclarations"]
     assert "parameters" not in declarations[0] and "parameters" in declarations[1]  # empty params omitted
+    assert out["model"] == "gemini-test"
     assert out["content"] == [
-        {"type": "tool_use", "id": "call_1", "name": "get_team", "input": {}, "thought_signature": "sig-1"},
+        {"type": "tool_use", "id": "call_1", "name": "get_team", "input": {}, "gemini_model": "gemini-test", "thought_signature": "sig-1"},
         {"type": "text", "text": "calling"},
     ]
 
@@ -238,30 +242,60 @@ def test_message_translation_round_trips_tool_calls_and_signatures():
     assert contents[1]["parts"][0] == {"functionCall": {"name": "search_entities", "args": {"query": "q"}}, "thoughtSignature": "sig"}
     assert contents[2]["parts"][0]["functionResponse"] == {"name": "search_entities", "response": {"result": [{"entity_id": "e1"}]}}
     assert contents[4]["parts"][0]["functionResponse"] == {"name": "get_recommendations", "response": {"error": "bad id"}}
-    assert from_gemini_parts([{"text": ""}, {"functionCall": {"name": "x"}}])[0]["input"] == {}
+    assert from_gemini_parts([{"text": ""}, {"functionCall": {"name": "x"}}], "m")[0]["input"] == {}
     assert to_gemini_tools([])[0] == {"functionDeclarations": []}
 
 
-def test_gemini_retries_once_on_free_tier_rate_limit():
+def test_rate_limit_moves_straight_to_the_next_model_without_waiting():
+    import asyncio
+    asked = []
+
+    def handler(req):
+        asked.append(req.url.path)
+        if "model-a" in req.url.path:
+            return httpx.Response(429, text="quota", headers={"retry-after": "30"})
+        return gemini_reply({"functionCall": {"name": "get_team", "args": {}}})
+
+    client = GeminiClient(SECRET, "model-a,model-b", retry_delay=0, transport=httpx.MockTransport(handler))
+    out = asyncio.run(client.complete("s", [{"role": "user", "content": "x"}], []))
+    assert out["model"] == "model-b" and len(asked) == 2  # one try on model-a, then model-b
+
+
+def test_a_pinned_run_waits_out_a_short_rate_limit_and_retries():
     import asyncio
     calls = []
 
     def handler(req):
         calls.append(1)
-        return httpx.Response(429, text="quota") if len(calls) == 1 else gemini_reply({"functionCall": {"name": "get_team", "args": {}}})
+        if len(calls) == 1:
+            return httpx.Response(429, json={"error": {"details": [{"retryDelay": "0s"}]}})
+        return gemini_reply({"functionCall": {"name": "get_team", "args": {}}})
 
-    out = asyncio.run(client_with(handler).complete("s", [{"role": "user", "content": "x"}], []))
-    assert len(calls) == 2 and out["content"][0]["name"] == "get_team"
+    history = [{"role": "user", "content": "x"},
+               {"role": "assistant", "content": [{"type": "tool_use", "id": "c", "name": "get_team", "input": {}, "gemini_model": "model-b"}]},
+               {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "c", "content": "{}", "is_error": False}]}]
+    client = GeminiClient(SECRET, "model-a,model-b", retry_delay=0, transport=httpx.MockTransport(handler))
+    out = asyncio.run(client.complete("s", history, []))
+    assert len(calls) == 2 and out["model"] == "model-b"
+
+
+def test_retry_after_parsing():
+    from app.llm import retry_after_seconds
+    assert retry_after_seconds(httpx.Response(429, headers={"retry-after": "12"})) == 12.0
+    assert retry_after_seconds(httpx.Response(429, json={"error": {"details": [{"retryDelay": "21.5s"}]}})) == 21.5
+    assert retry_after_seconds(httpx.Response(429, text="nope")) is None
 
 
 @pytest.mark.parametrize("handler,code", [
     (lambda req: (_ for _ in ()).throw(httpx.ReadTimeout("slow", request=req)), "agent_timeout"),
     (lambda req: (_ for _ in ()).throw(httpx.ConnectError("down", request=req)), "agent_unreachable"),
     (lambda req: httpx.Response(429, text="slow"), "agent_rate_limited"),
+    (lambda req: httpx.Response(404, json={"error": {"message": f"model not found {SECRET}"}}), "agent_model_not_found"),
     (lambda req: httpx.Response(403, json={"echo": SECRET}), "agent_auth_failed"),
     (lambda req: httpx.Response(400, json={"error": {"message": f"API key not valid {SECRET}"}}), "agent_auth_failed"),
     (lambda req: httpx.Response(400, text=f"bad request {SECRET}"), "agent_error"),
-    (lambda req: httpx.Response(500, text=f"boom {SECRET}"), "agent_error"),
+    (lambda req: httpx.Response(503, text=f"overloaded {SECRET}"), "agent_overloaded"),
+    (lambda req: httpx.Response(418, text=f"boom {SECRET}"), "agent_error"),
     (lambda req: httpx.Response(200, text="<html>"), "agent_bad_response"),
     (lambda req: httpx.Response(200, json={"candidates": []}), "agent_bad_response"),
     (lambda req: httpx.Response(200, json={"promptFeedback": {"blockReason": "SAFETY"}}), "agent_blocked"),
@@ -299,6 +333,61 @@ def test_agent_works_end_to_end_through_the_gemini_client():
         assert ev[-1]["data"]["recommendations"][0]["title"] == "Kendrick Lamar"
         sent_back = bodies[1]["contents"][-1]["parts"][0]["functionResponse"]
         assert sent_back["name"] == "search_entities" and sent_back["response"]["result"][0]["entity_id"] == "mock:music:daft-punk"
+
+
+def test_gemini_falls_back_to_the_next_model_when_one_is_overloaded_gone_or_slow():
+    import asyncio
+    for failing in (lambda req: httpx.Response(503, text="busy"), lambda req: httpx.Response(404, text="gone"),
+                    lambda req: (_ for _ in ()).throw(httpx.ReadTimeout("slow", request=req))):
+        asked = []
+
+        def handler(req, failing=failing):
+            asked.append(req.url.path.split("/")[-1].split(":")[0])
+            if "model-a" in req.url.path:
+                return failing(req)
+            return gemini_reply({"functionCall": {"name": "get_team", "args": {}}})
+
+        client = GeminiClient(SECRET, "model-a, models/model-b", retry_delay=0, transport=httpx.MockTransport(handler))
+        out = asyncio.run(client.complete("s", [{"role": "user", "content": "x"}], []))
+        assert out["model"] == "model-b" and out["content"][0]["gemini_model"] == "model-b"
+        assert asked[0] == "model-a" and asked[-1] == "model-b"
+
+
+def test_a_run_stays_on_the_model_that_wrote_its_tool_calls():
+    import asyncio
+    asked = []
+
+    def handler(req):
+        asked.append(req.url.path)
+        return gemini_reply({"functionCall": {"name": "get_team", "args": {}}})
+
+    history = [{"role": "user", "content": "x"},
+               {"role": "assistant", "content": [{"type": "tool_use", "id": "c", "name": "get_team", "input": {},
+                                                  "gemini_model": "model-b", "thought_signature": "s"}]},
+               {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "c", "content": "{}", "is_error": False}]}]
+    client = GeminiClient(SECRET, "model-a,model-b", retry_delay=0, transport=httpx.MockTransport(handler))
+    asyncio.run(client.complete("s", history, []))
+    assert len(asked) == 1 and "model-b" in asked[0]
+
+
+def test_identical_tool_calls_are_rejected_to_stop_loops():
+    turns = [[use("search_entities", query="Daft Punk", category="music")]] * 2 + [[use("submit_plan", summary="s", recommendations=[{"entity_id": "mock:music:daft-punk", "why": "w"}])]]
+    with make(FakeLlm(turns)) as c:
+        tid = team_with_interests(c)
+        ev = events(ask(c, tid))
+        assert ev[1]["ok"] is True and ev[2]["ok"] is False and "exact call" in ev[2]["summary"]
+        assert ev[-1]["data"]["qloo_calls"] == 1
+
+
+def test_no_plan_error_names_why_the_model_stopped():
+    class Truncated(FakeLlm):
+        async def complete(self, *a, **k):
+            return {"content": [], "finish_reason": "MAX_TOKENS"}
+
+    with make(Truncated([])) as c:
+        tid = team_with_interests(c)
+        last = events(ask(c, tid))[-1]
+        assert last["code"] == "agent_no_plan" and "MAX_TOKENS" in last["message"]
 
 
 def test_agent_error_class_has_no_secret():

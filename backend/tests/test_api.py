@@ -471,3 +471,12 @@ def test_oversized_body_is_rejected():
     with mock_client() as c:
         r = c.post("/api/teams", content=b"x" * 70_000, headers={"content-type": "application/json"})
         assert r.status_code == 413 and r.json()["error"]["code"] == "payload_too_large"
+
+
+def test_long_qloo_titles_are_accepted_up_to_200_chars():
+    long_title = ("A Very Long Book Title: " + "and the subtitle goes on " * 5).strip()  # ~150 chars
+    with mock_client() as c:
+        tid = mk_team(c)
+        m = mk_member(c, tid, "A", [I(long_title, "books", "book-1")])
+        assert m["interests"][0]["name"] == long_title
+        assert c.post(f"/api/teams/{tid}/members", json={"name": "B", "interests": [I("x" * 201)]}).status_code == 422

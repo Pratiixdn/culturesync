@@ -1,31 +1,36 @@
+"""Gemini client (HTTPX) for the agent. Works with the free tier.
+
+The agent keeps its messages in a simple block format (text / tool_use / tool_result); this module
+translates that to and from Gemini's generateContent API.
+"""
 from __future__ import annotations
- 
+
 import asyncio
 import json
 from typing import Any, Optional
- 
+
 import httpx
- 
- 
+
+
 class AgentError(Exception):
     """Safe-to-show failure of the agent or its LLM. Never carries keys or provider payloads."""
- 
+
     def __init__(self, code: str, message: str, status: int = 502):
         super().__init__(message)
         self.code, self.message, self.status = code, message, status
- 
- 
+
+
 def _role(role: str) -> str:
     return "user" if role == "user" else "model"
- 
- 
+
+
 def _parse_json(text: str) -> Any:
     try:
         return json.loads(text)
     except (TypeError, ValueError):
         return {"text": text}
- 
- 
+
+
 def to_gemini_contents(messages: list[dict]) -> list[dict]:
     tool_names: dict[str, str] = {}  # tool_use id -> tool name, needed for functionResponse
     contents = []
@@ -54,8 +59,8 @@ def to_gemini_contents(messages: list[dict]) -> list[dict]:
         if parts:
             contents.append({"role": _role(message["role"]), "parts": parts})
     return contents
- 
- 
+
+
 def to_gemini_tools(tools: list[dict]) -> list[dict]:
     declarations = []
     for tool in tools:
@@ -65,8 +70,8 @@ def to_gemini_tools(tools: list[dict]) -> list[dict]:
             declaration["parameters"] = schema
         declarations.append(declaration)
     return [{"functionDeclarations": declarations}]
- 
- 
+
+
 def from_gemini_parts(parts: list[dict], model: str = "") -> list[dict]:
     blocks = []
     for index, part in enumerate(parts):
@@ -82,8 +87,23 @@ def from_gemini_parts(parts: list[dict], model: str = "") -> list[dict]:
         elif part.get("text"):
             blocks.append({"type": "text", "text": part["text"]})
     return blocks
- 
- 
+
+
+def retry_after_seconds(response: httpx.Response) -> Optional[float]:
+    """How long Google asks us to wait on a 429 (Retry-After header, or retryDelay like '21s' in the body)."""
+    header = response.headers.get("retry-after", "")
+    if header.replace(".", "", 1).isdigit():
+        return float(header)
+    try:
+        for detail in response.json().get("error", {}).get("details", []):
+            delay = detail.get("retryDelay") if isinstance(detail, dict) else None
+            if isinstance(delay, str) and delay.endswith("s"):
+                return float(delay[:-1])
+    except (ValueError, AttributeError):
+        pass
+    return None
+
+
 def pinned_model(messages: list[dict]) -> Optional[str]:
     """The model that wrote earlier tool calls. Its thought signatures only work with that model."""
     for message in reversed(messages):
@@ -92,11 +112,11 @@ def pinned_model(messages: list[dict]) -> Optional[str]:
                 if block.get("type") == "tool_use" and block.get("gemini_model"):
                     return block["gemini_model"]
     return None
- 
- 
+
+
 class GeminiClient:
     """`model` may be a comma-separated list: later models are fallbacks if earlier ones are gone or overloaded."""
- 
+
     def __init__(self, api_key: str, model: str, timeout: float = 30.0, retry_delay: float = 3.0, attempts: int = 3,
                  transport: Optional[httpx.AsyncBaseTransport] = None):
         self.models = [m.strip().removeprefix("models/") for m in model.split(",") if m.strip()]
@@ -107,11 +127,11 @@ class GeminiClient:
             base_url="https://generativelanguage.googleapis.com", timeout=timeout, transport=transport,
             headers={"x-goog-api-key": api_key, "content-type": "application/json"},  # key stays out of the URL
         )
- 
+
     async def aclose(self) -> None:
         await self._http.aclose()
- 
-    async def _call_model(self, model: str, body: dict) -> dict:
+
+    async def _call_model(self, model: str, body: dict, pinned: bool = False) -> dict:
         """One model, with retries for temporary errors. Raises AgentError with `retry_next=True` if another model may work."""
         last: Optional[AgentError] = None
         for attempt in range(self._attempts):
@@ -131,11 +151,16 @@ class GeminiClient:
                                   "(run python scripts/list_gemini_models.py).", 502)
                 last.retry_next = True
                 break
-            if code in (429, 500, 502, 503, 504):
-                if code == 429:
-                    last = AgentError("agent_rate_limited", "The agent is busy (free-tier limit). Try again in a minute.", 429)
-                else:
-                    last = AgentError("agent_overloaded", "Gemini is overloaded right now. Try again in a moment.", 503)
+            if code == 429:
+                last = AgentError("agent_rate_limited", "The agent is busy (free-tier limit). Try again in a minute.", 429)
+                last.retry_next = True
+                wait = retry_after_seconds(response)
+                if pinned and wait is not None and wait <= 25 and attempt < self._attempts - 1:
+                    await asyncio.sleep(wait)  # this run cannot switch models, so wait out the limit
+                    continue
+                break  # each model has its own free quota: go straight to the next one
+            if code in (500, 502, 503, 504):
+                last = AgentError("agent_overloaded", "Gemini is overloaded right now. Try again in a moment.", 503)
                 last.retry_next = True
                 continue
             if code in (401, 403) or (code == 400 and "API key" in response.text):
@@ -144,7 +169,7 @@ class GeminiClient:
                 raise AgentError("agent_error", f"The agent's language model returned an error (HTTP {code}).", 502)
             return self._parse(response, model)
         raise last or AgentError("agent_error", "The agent's language model failed.", 502)
- 
+
     @staticmethod
     def _parse(response: httpx.Response, model: str) -> dict:
         try:
@@ -162,7 +187,7 @@ class GeminiClient:
         finish = (candidates[0] or {}).get("finishReason")
         return {"content": from_gemini_parts([p for p in parts if isinstance(p, dict)], model), "model": model,
                 "finish_reason": finish if isinstance(finish, str) else None}
- 
+
     async def complete(self, system: str, messages: list[dict], tools: list[dict], max_tokens: int = 8192) -> dict[str, Any]:
         """One model turn. Returns {"content": [blocks], "model": name_that_answered, "finish_reason": str|None}."""
         body = {
@@ -177,10 +202,9 @@ class GeminiClient:
         last: Optional[AgentError] = None
         for model in candidates:
             try:
-                return await self._call_model(model, body)
+                return await self._call_model(model, body, pinned=bool(pinned))
             except AgentError as err:
                 if not getattr(err, "retry_next", False):
                     raise
                 last = err
         raise last or AgentError("agent_error", "The agent's language model failed.", 502)
- 
