@@ -2,7 +2,7 @@
 
 **An AI agent that decides things for a whole team, using only what Qloo's taste data supports.**
 
-**Live demo:** `(https://culturesync.onrender.com/)`  |  **License:** MIT (see `LICENSE`)
+**Live demo:** `https://culturesync.onrender.com/`  |  **License:** MIT (see `LICENSE`)
 
 ## The problem
 Teams constantly decide things together: where to hold an offsite, where to eat, what music to play, where to travel. Everyone likes different things, and a normal AI just guesses what is popular.
