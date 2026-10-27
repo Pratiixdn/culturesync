@@ -11,7 +11,7 @@ Teams constantly decide things together: where to hold an offsite, where to eat,
 1. You create a team and add each person's tastes (artists, movies, TV, books, brands, games, podcasts, restaurants and places, travel destinations). Each one is matched to a real item in Qloo's database.
 2. You ask the **Team Culture Agent** for something, such as "Plan a team offsite everyone will enjoy".
 3. The agent searches Qloo step by step, and you watch each step live. It asks Qloo what fits the whole team's tastes.
-4. You get recommendations. Only items Qloo actually returned are kept. Anything the AI made up is removed, and the app shows how many it removed.
+4. You get recommendations and, for goals like improving team communication, concrete activities built on the picks. Only items Qloo actually returned are kept. Anything the AI made up is removed, and the app shows how many it removed.
 
 The app also has a **Map** and **Insights** page that show shared interests and Qloo-found links between team members, and a **Collaborate** page that turns a shared interest into a brainstorming activity.
 
@@ -45,6 +45,8 @@ Dockerfile, render.yaml
 | `QLOO_API_KEY` | Qloo hackathon developer guide | Yes (without it the app runs on a small mock sample, clearly labeled) |
 | `QLOO_BASE_URL` | Given with the hackathon key; default `https://hackathon.api.qloo.com` | Yes |
 | `GEMINI_API_KEY` | https://aistudio.google.com/apikey (free tier) | For the Agent page |
+| `AGENT_MODEL` | Comma-separated Gemini model names, tried in order (`python scripts/list_gemini_models.py` lists yours) | No |
+| `AGENT_DAILY_LIMIT` | Max agent runs per day for the whole server (default 50) | No |
 
 Copy `backend/.env.example` to `backend/.env` and fill them in. `.env` is git-ignored.
 
@@ -88,7 +90,7 @@ Light, Dark (#121212 background, #E0E0E0 text, #B0B0B0 secondary, #444444 border
 
 - Tools (Qloo-backed): `get_team`, `search_entities`, `get_recommendations`, `score_candidates`, plus `submit_plan`.
 - Grounding: a recommendation survives only if its entity id was returned by a Qloo tool in the same run; the title and affinity come from Qloo, never from the model. `supported_by` names are kept only if they match real team interests or returned entities. Dropped suggestions are counted and shown.
-- Limits: 8 model turns and 15 Qloo calls per run, 4 runs/min per IP, `AGENT_DAILY_LIMIT` runs/day for the whole server. Gemini free tier has tight per-minute limits (a run makes ~4-6 model calls), so the client retries a 429 once and otherwise shows a "busy, try again" message. Note: free-tier prompts may be used by Google to improve its products, so keep real personal data out of the demo.
+- Limits: 10 model turns and 15 Qloo calls per run, 4 runs/min per IP, `AGENT_DAILY_LIMIT` runs/day for the whole server. The Gemini free tier has tight per-minute limits, so the client retries temporary errors and falls back through the models in `AGENT_MODEL`; if all are busy it shows a "busy, try again" message. Free-tier prompts may be used by Google to improve its products, so keep real personal data out of the demo.
 - The agent does not run in mock Qloo mode with real quality: it still works, but over the small sample catalog and the UI says so.
 
 ## Hackathon requirements
